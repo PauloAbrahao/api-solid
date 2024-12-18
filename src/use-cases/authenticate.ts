@@ -1,66 +1,38 @@
-import { FastifyReply, FastifyRequest } from 'fastify'
-import { z } from 'zod'
+import { UsersRepository } from '@/repositories/users-repository'
 import { InvalidCredentialsError } from '@/use-cases/errors/invalid-credentials-error'
-import { makeAuthenticateUseCase } from '@/use-cases/factories/make-authenticate-use-case'
+import { User } from '@prisma/client'
+import { compare } from 'bcryptjs'
 
-export async function authenticate(
-  request: FastifyRequest,
-  reply: FastifyReply,
-) {
-  const authenticateBodySchema = z.object({
-    email: z.string().email(),
-    password: z.string().min(6),
-  })
+interface AuthenticateUseCaseRequest {
+  email: string
+  password: string
+}
 
-  const { email, password } = authenticateBodySchema.parse(request.body)
+interface AuthenticateUseCaseResponse {
+  user: User
+}
 
-  try {
-    const authenticateUseCase = makeAuthenticateUseCase()
+export class AuthenticateUseCase {
+  constructor(private usersRepository: UsersRepository) {}
 
-    const { user } = await authenticateUseCase.execute({
-      email,
-      password,
-    })
+  async execute({
+    email,
+    password,
+  }: AuthenticateUseCaseRequest): Promise<AuthenticateUseCaseResponse> {
+    const user = await this.usersRepository.findByEmail(email)
 
-    const token = await reply.jwtSign(
-      {
-        role: user.role,
-      },
-      {
-        sign: {
-          sub: user.id,
-        },
-      },
-    )
-
-    const refreshToken = await reply.jwtSign(
-      {
-        role: user.role,
-      },
-      {
-        sign: {
-          sub: user.id,
-          expiresIn: '7d',
-        },
-      },
-    )
-
-    return reply
-      .setCookie('refreshToken', refreshToken, {
-        path: '/',
-        secure: true,
-        sameSite: true,
-        httpOnly: true,
-      })
-      .status(200)
-      .send({
-        token,
-      })
-  } catch (err) {
-    if (err instanceof InvalidCredentialsError) {
-      return reply.status(400).send({ message: err.message })
+    if (!user) {
+      throw new InvalidCredentialsError()
     }
 
-    throw err
+    const doestPasswordMatches = await compare(password, user.password_hash)
+
+    if (!doestPasswordMatches) {
+      throw new InvalidCredentialsError()
+    }
+
+    return {
+      user,
+    }
   }
 }
